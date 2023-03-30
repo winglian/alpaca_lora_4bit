@@ -23,10 +23,14 @@ import peft
 import peft.tuners.lora
 assert peft.tuners.lora.is_gptq_available()
 
+import bitsandbytes as bnb
 import torch
 import transformers
+
 from autograd_4bit import load_llama_model_4bit_low_ram
 from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, PeftModel
+from torch import nn
+from transformers.trainer_pt_utils import get_parameter_names
 
 # ! Config
 from arg_parser import get_config
@@ -102,7 +106,7 @@ if not ft_config.skip:
         model.is_parallelizable = True
         model.model_parallel = True
 
-    training_arguments = transformers.TrainingArguments(
+    training_args = transformers.TrainingArguments(
         per_device_train_batch_size=ft_config.mbatch_size,
         gradient_accumulation_steps=ft_config.gradient_accumulation_steps,
         warmup_steps=ft_config.warmup_steps,
@@ -120,12 +124,43 @@ if not ft_config.skip:
         ddp_find_unused_parameters=False if ft_config.ddp else None,
     )
 
+    trainer_kwargs = {}
+
+    EIGHT_BIT_ADAM = True
+
+    if EIGHT_BIT_ADAM:
+        decay_parameters = get_parameter_names(model, [nn.LayerNorm])
+        decay_parameters = [name for name in decay_parameters if "bias" not in name]
+        optimizer_grouped_parameters = [
+            {
+                "params": [p for n, p in model.named_parameters() if n in decay_parameters],
+                "weight_decay": training_args.weight_decay,
+            },
+            {
+                "params": [p for n, p in model.named_parameters() if n not in decay_parameters],
+                "weight_decay": 0.0,
+            },
+        ]
+        optimizer_kwargs = {
+            "betas": (training_args.adam_beta1, training_args.adam_beta2),
+            "eps": training_args.adam_epsilon,
+        }
+        optimizer_kwargs["lr"] = training_args.learning_rate
+        adam_bnb_optim = bnb.optim.Adam8bit(
+            optimizer_grouped_parameters,
+            betas=(training_args.adam_beta1, training_args.adam_beta2),
+            eps=training_args.adam_epsilon,
+            lr=training_args.learning_rate,
+        )
+        trainer_kwargs['optimizers'] = (adam_bnb_optim, None)
+
     trainer = transformers.Trainer(
         model=model,
         train_dataset=data.train_data,
         eval_dataset=data.val_data,
-        args=training_arguments,
+        args=training_args,
         data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False),
+        **trainer_kwargs,
     )
     model.config.use_cache = False
 
