@@ -18,7 +18,7 @@
 """
 
 import sys
-import time
+import tqdm
 
 import evaluate as evaluate
 import peft
@@ -34,7 +34,7 @@ import transformers
 
 from accelerate import Accelerator
 from autograd_4bit import load_llama_model_4bit_low_ram
-from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, PeftModel
+from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, PeftModel, set_peft_model_state_dict
 from torch import nn
 from torch.utils.data.dataloader import DataLoader
 from transformers.trainer_pt_utils import get_parameter_names
@@ -201,23 +201,25 @@ if not ft_config.skip:
 
     loss_function = CrossEntropyLoss()
 
+    if ft_config.resume_checkpoint:
+        print('Resuming from {} ...'.format(ft_config.resume_checkpoint))
+        adapters_weights = torch.load(ft_config.resume_checkpoint)
+        model = set_peft_model_state_dict(model, adapters_weights)
+
+    model.train()
     for epoch in range(int(training_args.num_train_epochs)):
-        model.train()
-        for step, batch in enumerate(train_dataloader):
-            start_time = time.time()
+        for step, batch in enumerate(t:=tqdm.tqdm(train_dataloader)):
             batch = {k: v.to(accelerator.device) for k, v in batch.items()}
             with accelerator.accumulate(model):
                 output = model(**batch)
                 logits = output.logits
                 loss = loss_function(logits.view(-1, logits.shape[-1]), batch["input_ids"].view(-1))
                 loss = loss.half()
+                t.set_description(f"step loss: {loss.cpu().float()}")
                 accelerator.backward(loss)
                 adam_bnb_optim.step()
                 lr_scheduler.step()
                 adam_bnb_optim.zero_grad()
-                end_time = time.time()
-            elapsed_time = end_time - start_time
-            accelerator.print(f"Time elapsed for this step {step} / {len(train_dataloader)}: {elapsed_time:.4f} seconds")
         model.eval()
         for step, batch in enumerate(val_dataloader):
             batch = {k: v.to(accelerator.device) for k, v in batch.items()}
@@ -233,14 +235,6 @@ if not ft_config.skip:
         eval_metric = metric.compute()
         # Use accelerator.print to print only on the main process.
         accelerator.print(f"epoch {epoch}:", eval_metric)
-
-
-    # # Run Trainer
-    # if ft_config.resume_checkpoint:
-    #     print('Resuming from {} ...'.format(ft_config.resume_checkpoint))
-    #     trainer.train(ft_config.resume_checkpoint)
-    # else:
-    #     trainer.train()
 
     print('Train completed.')
 
