@@ -34,6 +34,10 @@ import train_data
 
 ft_config = get_config()
 
+if ft_config.flash_attn:
+    from llama_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
+    replace_llama_attn_with_flash_attn()
+
 # * Show loaded parameters
 if ft_config.local_rank == 0:
     print(f"{ft_config}\n")
