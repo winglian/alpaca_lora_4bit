@@ -1,3 +1,4 @@
+flash-attn
 torch
 accelerate
 bitsandbytes
