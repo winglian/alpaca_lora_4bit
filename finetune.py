@@ -18,23 +18,33 @@
 """
 
 import sys
+import time
 
+import evaluate as evaluate
 import peft
 import peft.tuners.lora
+from torch.nn import CrossEntropyLoss
+from transformers import get_linear_schedule_with_warmup
+
 assert peft.tuners.lora.is_gptq_available()
 
 import bitsandbytes as bnb
 import torch
 import transformers
 
+from accelerate import Accelerator
 from autograd_4bit import load_llama_model_4bit_low_ram
 from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, PeftModel
 from torch import nn
+from torch.utils.data.dataloader import DataLoader
 from transformers.trainer_pt_utils import get_parameter_names
 
 # ! Config
 from arg_parser import get_config
 import train_data
+
+accelerator = Accelerator()
+device = accelerator.device
 
 ft_config = get_config()
 
@@ -101,11 +111,6 @@ if not ft_config.skip:
         from gradient_checkpointing import apply_gradient_checkpointing
         apply_gradient_checkpointing(model, checkpoint_ratio=ft_config.gradient_checkpointing_ratio)
 
-    # Disable Trainer's DataParallel for multigpu
-    if not ft_config.ddp and torch.cuda.device_count() > 1:
-        model.is_parallelizable = True
-        model.model_parallel = True
-
     training_args = transformers.TrainingArguments(
         per_device_train_batch_size=ft_config.mbatch_size,
         gradient_accumulation_steps=ft_config.gradient_accumulation_steps,
@@ -126,43 +131,61 @@ if not ft_config.skip:
 
     trainer_kwargs = {}
 
-    EIGHT_BIT_ADAM = True
-
-    if EIGHT_BIT_ADAM:
-        decay_parameters = get_parameter_names(model, [nn.LayerNorm])
-        decay_parameters = [name for name in decay_parameters if "bias" not in name]
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in model.named_parameters() if n in decay_parameters],
-                "weight_decay": training_args.weight_decay,
-            },
-            {
-                "params": [p for n, p in model.named_parameters() if n not in decay_parameters],
-                "weight_decay": 0.0,
-            },
-        ]
-        optimizer_kwargs = {
-            "betas": (training_args.adam_beta1, training_args.adam_beta2),
-            "eps": training_args.adam_epsilon,
-        }
-        optimizer_kwargs["lr"] = training_args.learning_rate
-        adam_bnb_optim = bnb.optim.Adam8bit(
-            optimizer_grouped_parameters,
-            betas=(training_args.adam_beta1, training_args.adam_beta2),
-            eps=training_args.adam_epsilon,
-            lr=training_args.learning_rate,
-        )
-        trainer_kwargs['optimizers'] = (adam_bnb_optim, None)
-
-    trainer = transformers.Trainer(
-        model=model,
-        train_dataset=data.train_data,
-        eval_dataset=data.val_data,
-        args=training_args,
-        data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False),
-        **trainer_kwargs,
+    decay_parameters = get_parameter_names(model, [nn.LayerNorm])
+    decay_parameters = [name for name in decay_parameters if "bias" not in name]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if n in decay_parameters],
+            "weight_decay": training_args.weight_decay,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if n not in decay_parameters],
+            "weight_decay": 0.0,
+        },
+    ]
+    optimizer_kwargs = {
+        "betas": (training_args.adam_beta1, training_args.adam_beta2),
+        "eps": training_args.adam_epsilon,
+    }
+    optimizer_kwargs["lr"] = training_args.learning_rate
+    adam_bnb_optim = bnb.optim.Adam8bit(
+        optimizer_grouped_parameters,
+        betas=(training_args.adam_beta1, training_args.adam_beta2),
+        eps=training_args.adam_epsilon,
+        lr=training_args.learning_rate,
     )
-    model.config.use_cache = False
+    trainer_kwargs['optimizers'] = (adam_bnb_optim, None)
+
+    def custom_collate(batch):
+        max_length = max([len(item["input_ids"]) for item in batch])
+        padded_input_ids = []
+        padded_attention_mask = []
+
+        for item in batch:
+            input_ids = item["input_ids"]
+            attention_mask = item["attention_mask"]
+            padding_length = max_length - len(input_ids)
+
+            padded_input_ids.append(input_ids + [tokenizer.pad_token_id] * padding_length)
+            padded_attention_mask.append(attention_mask + [0] * padding_length)
+
+        return {
+            "input_ids": torch.tensor(padded_input_ids, dtype=torch.long),
+            "attention_mask": torch.tensor(padded_attention_mask, dtype=torch.long),
+        }
+
+    train_dataloader = DataLoader(data.train_data, batch_size=ft_config.mbatch_size, collate_fn=custom_collate)
+    val_dataloader = DataLoader(data.val_data, batch_size=ft_config.mbatch_size, collate_fn=custom_collate)
+
+    lr_scheduler = get_linear_schedule_with_warmup(
+        optimizer=adam_bnb_optim,
+        num_warmup_steps=training_args.warmup_steps,
+        num_training_steps=(len(train_dataloader) * training_args.num_train_epochs),
+    )
+
+    metric = evaluate.load("accuracy", "neg_log_loss")
+    if ft_config.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
 
     # Set Model dict
     old_state_dict = model.state_dict
@@ -170,16 +193,54 @@ if not ft_config.skip:
         lambda self, *_, **__: get_peft_model_state_dict(self, old_state_dict())
     ).__get__(model, type(model))
 
+    model, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(model, adam_bnb_optim, train_dataloader, val_dataloader, lr_scheduler)
+
     # Set Verbose
     if ft_config.verbose:
         transformers.logging.set_verbosity_info()
 
-    # Run Trainer
-    if ft_config.resume_checkpoint:
-        print('Resuming from {} ...'.format(ft_config.resume_checkpoint))
-        trainer.train(ft_config.resume_checkpoint)
-    else:
-        trainer.train()
+    loss_function = CrossEntropyLoss()
+
+    for epoch in range(int(training_args.num_train_epochs)):
+        model.train()
+        for step, batch in enumerate(train_dataloader):
+            start_time = time.time()
+            batch = {k: v.to(accelerator.device) for k, v in batch.items()}
+            with accelerator.accumulate(model):
+                output = model(**batch)
+                logits = output.logits
+                loss = loss_function(logits.view(-1, logits.shape[-1]), batch["input_ids"].view(-1))
+                loss = loss.half()
+                accelerator.backward(loss)
+                adam_bnb_optim.step()
+                lr_scheduler.step()
+                adam_bnb_optim.zero_grad()
+                end_time = time.time()
+            elapsed_time = end_time - start_time
+            accelerator.print(f"Time elapsed for this step {step} / {len(train_dataloader)}: {elapsed_time:.4f} seconds")
+        model.eval()
+        for step, batch in enumerate(val_dataloader):
+            batch = {k: v.to(accelerator.device) for k, v in batch.items()}
+            with torch.no_grad():
+                outputs = model(**batch)
+            predictions = outputs.logits.argmax(dim=-1)
+            predictions, references = accelerator.gather_for_metrics((predictions, batch["input_ids"]))
+            metric.add_batch(
+                predictions=predictions,
+                references=references,
+            )
+
+        eval_metric = metric.compute()
+        # Use accelerator.print to print only on the main process.
+        accelerator.print(f"epoch {epoch}:", eval_metric)
+
+
+    # # Run Trainer
+    # if ft_config.resume_checkpoint:
+    #     print('Resuming from {} ...'.format(ft_config.resume_checkpoint))
+    #     trainer.train(ft_config.resume_checkpoint)
+    # else:
+    #     trainer.train()
 
     print('Train completed.')
 

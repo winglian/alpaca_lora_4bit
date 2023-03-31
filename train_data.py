@@ -134,31 +134,12 @@ class TrainSAD(ATrainData):
     def tokenize(self, prompt: str, use_eos_token=True, **kwargs) -> Dict[str, Any]:
         # there's probably a way to do this with the tokenizer settings
         # but again, gotta move fast
-        if use_eos_token:
-            result = self.tokenizer(
-                prompt + self.tokenizer.eos_token,
-                truncation=True,
-                max_length=self.cutoff_len,
-                padding=False,
-            )
-            if (
-                result["input_ids"][-1] != self.tokenizer.eos_token_id
-                and len(result["input_ids"]) < self.cutoff_len
-            ):
-                result["input_ids"].append(self.tokenizer.eos_token_id)
-                result["attention_mask"].append(1)
-            return result
-        else:
-            result = self.tokenizer(
-                prompt,
-                truncation=True,
-                max_length=self.cutoff_len + 1,
-                padding="max_length",
-            )
-            return {
-                "input_ids": result["input_ids"][:-1],
-                "attention_mask": result["attention_mask"][:-1],
-            }
+        return self.tokenizer(
+            prompt + self.tokenizer.eos_token if use_eos_token else prompt,
+            truncation=True,
+            max_length=self.cutoff_len + (0 if use_eos_token else 1),
+            padding="max_length",
+        )
 
     def prepare_data(self, use_eos_token=True, **kwargs) -> None:
         data = load_dataset("json", data_files=self.dataset)

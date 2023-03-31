@@ -78,7 +78,7 @@ def _matmul4bit_v1_recons(x, qweight, scales, zeros, transpose=False):
     buffer = get_buffer(qweight.shape, dtype=scales.dtype, device=qweight.device)
     quant_cuda.vecquant4recons_v1(qweight, buffer, scales, zeros)
     if not transpose:
-        output = torch.matmul(x, buffer)
+        output = torch.matmul(x.half(), buffer.half())
     else:
         output = torch.matmul(x, buffer.T)
     return output
