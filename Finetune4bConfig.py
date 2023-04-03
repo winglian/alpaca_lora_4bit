@@ -15,7 +15,7 @@ class Finetune4bConfig:
                  warmup_steps: int, save_steps: int, save_total_limit: int, logging_steps: int,
                  checkpoint: bool, skip: bool, verbose: bool,
                  txt_row_thd: int, use_eos_token: bool, groupsize: int,
-                 local_rank: int,
+                 local_rank: int, ddp: bool
                  ):
         """
         Args:
@@ -48,6 +48,7 @@ class Finetune4bConfig:
             use_eos_token (bool): Use Eos token instead of padding with 0
             groupsize (int): Group size of V2 model, use -1 to load V1 model
             local_rank (int): local rank if using torch.distributed.launch
+            ddp (bool):
         """
         self.dataset = dataset
         self.ds_type = ds_type
@@ -79,7 +80,7 @@ class Finetune4bConfig:
         self.use_eos_token = use_eos_token
         self.world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.local_rank = int(os.environ.get("LOCAL_RANK", local_rank))
-        self.ddp = self.world_size != 1
+        self.ddp = ddp if ddp is not None else self.world_size != 1
         self.device_map = "auto" if not self.ddp else {"": self.local_rank}
         if self.ddp:
             self.gradient_accumulation_steps = self.gradient_accumulation_steps // self.world_size

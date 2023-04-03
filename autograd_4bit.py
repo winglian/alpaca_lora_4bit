@@ -142,6 +142,9 @@ def load_llama_model_4bit_low_ram(config_path, model_path, groupsize=-1, half=Fa
         model_to_half(model)
 
     tokenizer = LlamaTokenizer.from_pretrained(config_path)
+    tokenizer.pad_token_id = (
+        0  # unk. we want this to be different from the eos token
+    )
     tokenizer.truncation_side = 'left'
 
     print(f"Loaded the model in {(time.time()-t0):.2f} seconds.")

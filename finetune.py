@@ -62,7 +62,6 @@ else:
     model = PeftModel.from_pretrained(model, ft_config.lora_apply_dir, device_map={'': 0}, torch_dtype=torch.float32)  # ! Direct copy from inference.py
     print(ft_config.lora_apply_dir, 'loaded')
 
-
 # Scales to half
 print('Fitting 4bit scales and zeros to half')
 for n, m in model.named_modules():
@@ -71,8 +70,8 @@ for n, m in model.named_modules():
             m.zeros = m.zeros.half()
         m.scales = m.scales.half()
 
-# Set tokenizer
-tokenizer.pad_token_id = 0
+# write out the lora model for now so we have the adapter config
+model.save_pretrained(ft_config.lora_out_dir)
 
 if not ft_config.skip:
     # Load Data
@@ -118,6 +117,7 @@ if not ft_config.skip:
         save_total_limit=ft_config.save_total_limit,
         load_best_model_at_end=False,
         ddp_find_unused_parameters=False if ft_config.ddp else None,
+        optim="adamw_torch",
     )
 
     trainer = transformers.Trainer(
@@ -125,7 +125,9 @@ if not ft_config.skip:
         train_dataset=data.train_data,
         eval_dataset=data.val_data,
         args=training_arguments,
-        data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False),
+        data_collator=transformers.DataCollatorForSeq2Seq(
+            tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
+        ),
     )
     model.config.use_cache = False
 
