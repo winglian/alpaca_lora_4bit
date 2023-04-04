@@ -14,7 +14,7 @@ model_path = '../models/decapoda-research_llama-13b-hf-int4/llama-13b-4bit.pt'
 lora_path = './alpaca_lora/'
 
 model, tokenizer = load_llama_model_4bit_low_ram(config_path, model_path, groupsize=-1)
-model = PeftModel.from_pretrained(model, lora_path, device_map={'': 0}, torch_dtype=torch.float32)
+model = PeftModel.from_pretrained(model, lora_path, device_map="auto", torch_dtype=torch.float32)
 
 print('Fitting 4bit scales and zeros to half')
 # model.half()

@@ -109,3 +109,25 @@ class TrainSAD(ATrainData):
             self.train_data = (data["train"].shuffle().map(lambda x: self.generate_and_tokenize_prompt(x, use_eos_token=use_eos_token)))
             self.val_data = None
 
+
+class TrainGPT4All(TrainSAD):
+    def generate_and_tokenize_prompt(self, data_point, use_eos_token=False):
+        full_prompt = self.prompter.generate_prompt(
+            data_point["prompt"],
+            "",
+            data_point["response"],
+        )
+        tokenized_full_prompt = self.tokenize(full_prompt)
+        if not self.train_on_inputs:
+            user_prompt = self.prompter.generate_prompt(
+                data_point["instruction"], data_point["input"]
+            )
+            tokenized_user_prompt = self.tokenize(user_prompt, use_eos_token=use_eos_token)
+            user_prompt_len = len(tokenized_user_prompt["input_ids"])
+
+            tokenized_full_prompt["labels"] = [
+                -100
+            ] * user_prompt_len + tokenized_full_prompt["labels"][
+                user_prompt_len:
+            ]  # could be sped up, probably
+        return tokenized_full_prompt
