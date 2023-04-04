@@ -120,7 +120,7 @@ class TrainGPT4All(TrainSAD):
         tokenized_full_prompt = self.tokenize(full_prompt)
         if not self.train_on_inputs:
             user_prompt = self.prompter.generate_prompt(
-                data_point["instruction"], data_point["input"]
+                data_point["prompt"], data_point["input"]
             )
             tokenized_user_prompt = self.tokenize(user_prompt, use_eos_token=use_eos_token)
             user_prompt_len = len(tokenized_user_prompt["input_ids"])
