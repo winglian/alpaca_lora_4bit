@@ -120,7 +120,29 @@ class TrainGPT4All(TrainSAD):
         tokenized_full_prompt = self.tokenize(full_prompt)
         if not self.train_on_inputs:
             user_prompt = self.prompter.generate_prompt(
-                data_point["prompt"], data_point["input"]
+                data_point["prompt"], ""
+            )
+            tokenized_user_prompt = self.tokenize(user_prompt, use_eos_token=use_eos_token)
+            user_prompt_len = len(tokenized_user_prompt["input_ids"])
+
+            tokenized_full_prompt["labels"] = [
+                -100
+            ] * user_prompt_len + tokenized_full_prompt["labels"][
+                user_prompt_len:
+            ]  # could be sped up, probably
+        return tokenized_full_prompt
+
+class TrainLeetcode(TrainSAD):
+    def generate_and_tokenize_prompt(self, data_point, use_eos_token=False):
+        full_prompt = self.prompter.generate_prompt(
+            data_point["question"],
+            "",
+            data_point["answer"],
+        )
+        tokenized_full_prompt = self.tokenize(full_prompt)
+        if not self.train_on_inputs:
+            user_prompt = self.prompter.generate_prompt(
+                data_point["question"], ""
             )
             tokenized_user_prompt = self.tokenize(user_prompt, use_eos_token=use_eos_token)
             user_prompt_len = len(tokenized_user_prompt["input_ids"])
