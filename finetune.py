@@ -45,7 +45,6 @@ from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, PeftMode
 import train_data
 
 
-
 # * Show loaded parameters
 if ft_config.local_rank == 0:
     print(f"{ft_config}\n")
@@ -97,20 +96,7 @@ tokenizer.pad_token_id = 0
 
 if not ft_config.skip:
     # Load Data
-    data = None
-    if ft_config.ds_type == "txt" and not ft_config.skip:
-        #### LLaMa
-        data = train_data.TrainTxt(ft_config.dataset, ft_config.val_set_size, tokenizer, ft_config.cutoff_len)
-    elif ft_config.ds_type == "alpaca" and not ft_config.skip:
-        #### Stanford Alpaca-like Data
-        data = train_data.TrainSAD(ft_config.dataset, ft_config.val_set_size, tokenizer, ft_config.cutoff_len)
-    elif ft_config.ds_type == "gpt4all" and not ft_config.skip:
-        #### GPT4All Data
-        data = train_data.TrainGPT4All(ft_config.dataset, ft_config.val_set_size, tokenizer, ft_config.cutoff_len)
-    else:
-        raise NotImplementedError("ERROR: Unknown dataset format")
-    data.prepare_data(thd=ft_config.txt_row_thd, use_eos_token=ft_config.use_eos_token)
-    ####
+    train_data, val_data = train_data.load(ft_config.dataset, ft_config, tokenizer)
 
     # Use gradient checkpointing
     if ft_config.gradient_checkpointing:
@@ -144,8 +130,8 @@ if not ft_config.skip:
 
     trainer = transformers.Trainer(
         model=model,
-        train_dataset=data.train_data,
-        eval_dataset=data.val_data,
+        train_dataset=train_data,
+        eval_dataset=val_data,
         args=training_arguments,
         data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False),
     )

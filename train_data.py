@@ -2,10 +2,35 @@ import torch
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any
-from datasets import load_dataset, Dataset
-from torch.utils.data import DataLoader
-from transformers import DefaultDataCollator
+from datasets import interleave_datasets, load_dataset, Dataset
 import os
+
+
+def load(datasets, ft_config, tokenizer):
+    train_data = None
+    val_data = None
+    for dataset_config in datasets:
+        dataset, ds_type = dataset_config
+        if ft_config.ds_type == "txt" and not ft_config.skip:
+            #### LLaMa
+            subdata = TrainTxt(ft_config.dataset, ft_config.val_set_size, tokenizer, ft_config.cutoff_len)
+        elif ft_config.ds_type == "alpaca" and not ft_config.skip:
+            #### Stanford Alpaca-like Data
+            subdata = TrainSAD(ft_config.dataset, ft_config.val_set_size, tokenizer, ft_config.cutoff_len)
+        elif ft_config.ds_type == "gpt4all" and not ft_config.skip:
+            #### GPT4All Data
+            subdata = TrainGPT4All(ft_config.dataset, ft_config.val_set_size, tokenizer, ft_config.cutoff_len)
+        else:
+            raise NotImplementedError("ERROR: Unknown dataset format")
+        subdata.prepare_data(thd=ft_config.txt_row_thd, use_eos_token=ft_config.use_eos_token)
+        if train_data is None:
+            train_data = subdata.train_data
+            val_data = subdata.val_data
+        else:
+            train_data = interleave_datasets([train_data, subdata.train_data], stopping_strategy="all_exhausted")
+            val_data = interleave_datasets([val_data, subdata.val_data], stopping_strategy="all_exhausted")
+
+    return train_data, val_data
 
 
 # Abstract train data loader

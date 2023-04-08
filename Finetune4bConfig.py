@@ -1,5 +1,5 @@
 import os
-class Finetune4bConfig:
+class Finetune4bConfig(object):
     """Config holder for LLaMA 4bit finetuning
     """
     def __init__(self, dataset: str, ds_type: str,
@@ -15,7 +15,8 @@ class Finetune4bConfig:
                  warmup_steps: int, save_steps: int, save_total_limit: int, logging_steps: int,
                  checkpoint: bool, skip: bool, verbose: bool,
                  txt_row_thd: int, use_eos_token: bool, groupsize: int,
-                 local_rank: int, flash_attention: bool, backend: str
+                 local_rank: int, flash_attention: bool, backend: str,
+                 **kwargs
                  ):
         """
         Args:
@@ -50,6 +51,7 @@ class Finetune4bConfig:
             local_rank (int): local rank if using torch.distributed.launch
             flash_attention (bool): Enables flash attention
         """
+        self.datasets = [(x.split('|')[0], x.split('|')[1] if len(x.split('|')) > 1 else ds_type) for x in dataset.split(',')]
         self.dataset = dataset
         self.ds_type = ds_type
         self.lora_out_dir = lora_out_dir
@@ -88,7 +90,6 @@ class Finetune4bConfig:
         self.flash_attention = flash_attention
         self.backend = backend
 
-
     def __str__(self) -> str:
         s = f"\nParameters:\n{'config':-^20}\n{self.dataset=}\n{self.ds_type=}\n{self.lora_out_dir=}\n{self.lora_apply_dir=}\n{self.llama_q4_config_dir=}\n{self.llama_q4_model=}\n\n" +\
         f"{'training':-^20}\n" +\
@@ -101,3 +102,6 @@ class Finetune4bConfig:
         f"{self.world_size=}\n{self.ddp=}\n{self.device_map=}\n" +\
         f"{self.groupsize=}\n{self.backend=}\n"
         return s.replace("self.", "")
+
+    def __iter__(self):
+        pass
