@@ -199,6 +199,7 @@ def load_llama_model_4bit_low_ram(config_path, model_path, groupsize=-1, half=Fa
             if name in layers:
                 del layers[name]
         make_quant_for_4bit_autograd(model, layers, groupsize=groupsize, is_v1_model=is_v1_model)
+    model.tie_weights()
     model = accelerate.load_checkpoint_and_dispatch(
         model=model,
         checkpoint=model_path,
@@ -237,6 +238,7 @@ def load_llama_model_4bit_low_ram_and_offload(config_path, model_path, lora_path
             if name in layers:
                 del layers[name]
         make_quant_for_4bit_autograd(model, layers, groupsize=groupsize, is_v1_model=is_v1_model)
+    model.tie_weights()
     accelerate.load_checkpoint_in_model(model, checkpoint=model_path, device_map={'': 'cpu'})
 
     # rotary_emb fix
